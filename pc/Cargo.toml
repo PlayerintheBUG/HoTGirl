@@ -1,0 +1,22 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/hotgirl-protocol",
+    "crates/hotgirl-core",
+    "crates/hotgirl-app",
+    "crates/spike-cursor",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[workspace.dependencies]
+nalgebra = "0.33"
+eframe = "0.29"
+egui = "0.29"
+ashpd = { version = "0.13", features = ["tokio", "remote_desktop", "screencast"] }
+reis = { version = "0.7", features = ["tokio"] }
+tokio = { version = "1", features = ["full"] }
+futures-util = "0.3"

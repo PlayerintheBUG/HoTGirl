@@ -1,0 +1,9 @@
+[package]
+name = "hotgirl-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+hotgirl-protocol = { path = "../hotgirl-protocol" }
+nalgebra.workspace = true
