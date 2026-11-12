@@ -1,12 +1,17 @@
 package app.hotgirl
 
+import android.Manifest
 import android.content.Context
 import android.content.SharedPreferences
+import android.content.pm.PackageManager
 import android.os.Bundle
 import android.widget.Button
 import android.widget.EditText
 import android.widget.TextView
+import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 
 class MainActivity : AppCompatActivity() {
 
@@ -33,14 +38,37 @@ class MainActivity : AppCompatActivity() {
                 status.text = getString(R.string.status_missing_host)
                 return@setOnClickListener
             }
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
+                != PackageManager.PERMISSION_GRANTED
+            ) {
+                ActivityCompat.requestPermissions(
+                    this, arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1
+                )
+            }
             prefs.edit().putString("host", host).putInt("port", port).apply()
-            HeadTrackerService.start(this, host, port)
-            status.text = getString(R.string.status_running)
+            try {
+                HeadTrackerService.start(this, host, port)
+                status.text = getString(R.string.status_running)
+            } catch (e: Exception) {
+                status.text = getString(R.string.status_error, e)
+                Toast.makeText(this, getString(R.string.status_error, e), Toast.LENGTH_LONG).show()
+            }
         }
 
         stop.setOnClickListener {
             HeadTrackerService.stop(this)
             status.text = getString(R.string.status_stopped)
+        }
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == 1 && grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) {
+            Toast.makeText(this, R.string.permission_granted, Toast.LENGTH_SHORT).show()
         }
     }
 }

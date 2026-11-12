@@ -38,31 +38,36 @@ class HeadTrackerService : Service(), SensorEventListener {
             return START_NOT_STICKY
         }
         val host = intent?.getStringExtra(EXTRA_HOST) ?: return START_NOT_STICKY
-        targetPort = intent.getIntExtra(EXTRA_PORT, DEFAULT_PORT)
-        target.set(InetAddress.getByName(host))
+        startForegroundNotification()
+        try {
+            targetPort = intent.getIntExtra(EXTRA_PORT, DEFAULT_PORT)
+            target.set(InetAddress.getByName(host))
 
-        sensorManager = getSystemService(SENSOR_SERVICE) as SensorManager
-        val sensor = sensorManager.getDefaultSensor(Sensor.TYPE_GAME_ROTATION_VECTOR) ?: run {
+            sensorManager = getSystemService(SENSOR_SERVICE) as SensorManager
+            val sensor = sensorManager.getDefaultSensor(Sensor.TYPE_GAME_ROTATION_VECTOR)
+                ?: throw IllegalStateException("GAME_ROTATION_VECTOR non disponibile")
+
+            val pm = getSystemService(POWER_SERVICE) as PowerManager
+            wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "hotgirl:tracker").apply {
+                acquire()
+            }
+            val wm = applicationContext.getSystemService(WIFI_SERVICE) as WifiManager
+            wifiLock =
+                wm.createWifiLock(WifiManager.WIFI_MODE_FULL_LOW_LATENCY, "hotgirl:wifi").apply {
+                    acquire()
+                }
+
+            socket?.close()
+            socket = DatagramSocket()
+            Thread(::pingLoop, "hotgirl-ping").start()
+
+            sensorManager.registerListener(this, sensor, 10_000)
+        } catch (e: Exception) {
+            Toast.makeText(this, "HoTGirl: ${e.javaClass.simpleName}: ${e.message}", Toast.LENGTH_LONG)
+                .show()
             stopSelf()
             return START_NOT_STICKY
         }
-
-        startForegroundNotification()
-
-        val pm = getSystemService(POWER_SERVICE) as PowerManager
-        wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "hotgirl:tracker").apply {
-            acquire()
-        }
-        val wm = applicationContext.getSystemService(WIFI_SERVICE) as WifiManager
-        wifiLock = wm.createWifiLock(WifiManager.WIFI_MODE_FULL_LOW_LATENCY, "hotgirl:wifi").apply {
-            acquire()
-        }
-
-        socket?.close()
-        socket = DatagramSocket()
-        Thread(::pingLoop, "hotgirl-ping").start()
-
-        sensorManager.registerListener(this, sensor, 10_000)
         return START_STICKY
     }
 
