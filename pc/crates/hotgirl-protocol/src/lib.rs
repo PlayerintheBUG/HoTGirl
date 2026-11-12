@@ -36,6 +36,8 @@ impl Kind {
 /// One IMU orientation sample produced by the phone.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Sample {
+    /// Wrap-around sequence number from the header, for loss measurement.
+    pub seq: u16,
     /// Sensor event time, in phone `elapsedRealtimeNanos` clock.
     pub event_ts_ns: i64,
     /// Phone send time, same clock.
@@ -100,8 +102,8 @@ fn write_header(buf: &mut [u8], kind: Kind, seq: u16, sent_ts_ns: i64) {
     buf[8..16].copy_from_slice(&sent_ts_ns.to_le_bytes());
 }
 
-pub fn encode_sample(seq: u16, s: &Sample, out: &mut [u8; HEADER_LEN + SAMPLE_PAYLOAD_LEN]) {
-    write_header(out, Kind::Sample, seq, s.sent_ts_ns);
+pub fn encode_sample(s: &Sample, out: &mut [u8; HEADER_LEN + SAMPLE_PAYLOAD_LEN]) {
+    write_header(out, Kind::Sample, s.seq, s.sent_ts_ns);
     out[16..24].copy_from_slice(&s.event_ts_ns.to_le_bytes());
     for (i, v) in s.quat.iter().enumerate() {
         out[24 + i * 4..28 + i * 4].copy_from_slice(&v.to_le_bytes());
@@ -136,6 +138,7 @@ pub fn decode(buf: &[u8]) -> Result<Packet, DecodeError> {
                 return Err(DecodeError);
             }
             Ok(Packet::Sample(Sample {
+                seq: u16::from_le_bytes(buf[6..8].try_into().unwrap()),
                 event_ts_ns: read_i64_le(buf, 16),
                 sent_ts_ns,
                 quat: [
@@ -193,13 +196,14 @@ mod tests {
     #[test]
     fn sample_roundtrip() {
         let s = Sample {
+            seq: 7,
             event_ts_ns: 123_456_789,
             sent_ts_ns: 124_000_000,
             quat: [0.1, -0.2, 0.3, 0.9],
             accuracy: 2.0,
         };
         let mut buf = [0u8; HEADER_LEN + SAMPLE_PAYLOAD_LEN];
-        encode_sample(7, &s, &mut buf);
+        encode_sample(&s, &mut buf);
         match decode(&buf).unwrap() {
             Packet::Sample(got) => assert_eq!(got, s),
             other => panic!("wrong kind: {other:?}"),
@@ -231,7 +235,8 @@ mod tests {
         assert!(decode(&[]).is_err());
         assert!(decode(&[0u8; 4]).is_err());
         let mut buf = [0u8; HEADER_LEN + SAMPLE_PAYLOAD_LEN];
-        encode_sample(0, &Sample {
+        encode_sample(&Sample {
+            seq: 0,
             event_ts_ns: 0,
             sent_ts_ns: 0,
             quat: [0.0; 4],

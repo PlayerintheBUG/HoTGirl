@@ -1,3 +1,4 @@
+use std::io::BufWriter;
 use std::net::UdpSocket;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -15,15 +16,26 @@ fn main() -> eframe::Result {
         .get(1)
         .map(|s| s.parse().expect("listen port must be a number"))
         .unwrap_or(5555);
+    let record_file = args.get(2).map(std::path::PathBuf::from);
 
     let epoch = Instant::now();
     let state = Arc::new(AppState::new());
     let socket =
         Arc::new(UdpSocket::bind(("0.0.0.0", listen_port)).expect("bind UDP listen socket"));
 
+    let recorder = Arc::new(Mutex::new(
+        record_file
+            .map(|path| {
+                std::fs::File::create(&path)
+                    .map(BufWriter::new)
+                    .expect("create record file")
+            }),
+    ));
+
     let rx_state = Arc::clone(&state);
     let rx_socket = Arc::clone(&socket);
-    thread::spawn(move || receive_loop(rx_socket, rx_state, epoch));
+    let rx_recorder = Arc::clone(&recorder);
+    thread::spawn(move || receive_loop(rx_socket, rx_state, epoch, rx_recorder));
 
     let tx_state = Arc::clone(&state);
     let tx_socket = Arc::clone(&socket);
@@ -50,6 +62,7 @@ pub struct AppState {
     pub stats: Stats,
     pub opentrack_enabled: AtomicBool,
     pub opentrack_addr: Mutex<String>,
+    pub recorder: Mutex<Option<BufWriter<std::fs::File>>>,
 }
 
 impl AppState {
@@ -62,6 +75,7 @@ impl AppState {
             stats: Stats::default(),
             opentrack_enabled: AtomicBool::new(false),
             opentrack_addr: Mutex::new("127.0.0.1:4242".to_string()),
+            recorder: Mutex::new(None),
         }
     }
 }
@@ -155,7 +169,12 @@ fn pc_now_ns(epoch: &Instant) -> i64 {
     epoch.elapsed().as_nanos() as i64
 }
 
-fn receive_loop(socket: Arc<UdpSocket>, state: Arc<AppState>, epoch: Instant) {
+fn receive_loop(
+    socket: Arc<UdpSocket>,
+    state: Arc<AppState>,
+    epoch: Instant,
+    recorder: Arc<Mutex<Option<BufWriter<std::fs::File>>>>,
+) {
     let mut buf = [0u8; 1500];
     loop {
         let (len, addr) = match socket.recv_from(&mut buf) {
@@ -180,6 +199,21 @@ fn receive_loop(socket: Arc<UdpSocket>, state: Arc<AppState>, epoch: Instant) {
                 let event_pc = sample.event_ts_ns - offset;
                 state.buffer.lock().unwrap().push(event_pc, sample);
                 *state.pose.lock().unwrap() = quat_to_pose(sample.quat);
+                if let Some(writer) = recorder.lock().unwrap().as_mut() {
+                    use std::io::Write;
+                    let recv_ns = pc_now_ns(&epoch);
+                    let q = sample.quat;
+                    let _ = writeln!(
+                        writer,
+                        "{recv_ns},{event_pc},{},{},{},{},{},{}",
+                        sample.seq,
+                        q[0],
+                        q[1],
+                        q[2],
+                        q[3],
+                        sample.accuracy
+                    );
+                }
             }
             Packet::Pong(pong) => {
                 let now = pc_now_ns(&epoch);

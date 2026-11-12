@@ -31,6 +31,7 @@ fn main() {
         let t = epoch.elapsed().as_secs_f64();
         let yaw = (t * 0.5).rem_euclid(std::f64::consts::TAU);
         let sample = Sample {
+            seq,
             event_ts_ns: epoch.elapsed().as_nanos() as i64,
             sent_ts_ns: epoch.elapsed().as_nanos() as i64,
             quat: [
@@ -41,7 +42,7 @@ fn main() {
             ],
             accuracy: 2.0,
         };
-        encode_sample(seq, &sample, &mut buf);
+        encode_sample(&sample, &mut buf);
         if socket.send(&buf).is_err() {
             eprintln!("send failed");
         }
