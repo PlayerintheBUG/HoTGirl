@@ -36,6 +36,10 @@ class HeadTrackerService : Service(), SensorEventListener {
     private var wakeLock: PowerManager.WakeLock? = null
     private var wifiLock: WifiManager.WifiLock? = null
     private var sensorThread: HandlerThread? = null
+    private var lastSensorTimestamp: Long = 0
+    private val initDeltas = ArrayList<Long>(64)
+    private val clockOffsetNs = AtomicLong(0)
+    private val clockOffsetReady = AtomicBoolean(false)
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -102,7 +106,8 @@ class HeadTrackerService : Service(), SensorEventListener {
         val quaternion = event.values
         val buf = ByteArray(SAMPLE_PACKET_LEN)
         writeHeader(buf, KIND_SAMPLE, seq.getAndIncrement() and 0xFFFF)
-        writeI64(buf, 16, event.timestamp)
+        lastSensorTimestamp = event.timestamp
+        writeI64(buf, 16, event.timestamp + sensorClockOffset())
         writeF32(buf, 24, quaternion[0])
         writeF32(buf, 28, quaternion[1])
         writeF32(buf, 32, quaternion[2])
@@ -119,6 +124,27 @@ class HeadTrackerService : Service(), SensorEventListener {
     }
 
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
+
+    /**
+     * Sensor event timestamps may use a different clock base than
+     * elapsedRealtimeNanos (e.g. monotonic without suspend time). Estimate
+     * the constant difference as the median of the first 64 delivery deltas,
+     * then reuse it for every event.
+     */
+    private fun sensorClockOffset(): Long {
+        if (clockOffsetReady.get()) return clockOffsetNs.get()
+        val now = SystemClock.elapsedRealtimeNanos()
+        synchronized(initDeltas) {
+            if (clockOffsetReady.get()) return clockOffsetNs.get()
+            initDeltas.add(now - lastSensorTimestamp)
+            if (initDeltas.size >= 64) {
+                val sorted = initDeltas.toLongArray().also { it.sort() }
+                clockOffsetNs.set(sorted[sorted.size / 2])
+                clockOffsetReady.set(true)
+            }
+        }
+        return clockOffsetNs.get()
+    }
 
     private fun pingLoop() {
         val sock = socket ?: return
