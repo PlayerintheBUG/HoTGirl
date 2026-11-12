@@ -37,8 +37,6 @@ class HeadTrackerService : Service(), SensorEventListener {
     private var wifiLock: WifiManager.WifiLock? = null
     private var sensorThread: HandlerThread? = null
 
-    val running = AtomicBoolean(false)
-
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
