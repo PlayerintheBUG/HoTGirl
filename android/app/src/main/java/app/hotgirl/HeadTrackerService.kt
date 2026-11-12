@@ -12,6 +12,8 @@ import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.net.wifi.WifiManager
+import android.os.Handler
+import android.os.HandlerThread
 import android.os.IBinder
 import android.os.PowerManager
 import android.os.SystemClock
@@ -33,6 +35,7 @@ class HeadTrackerService : Service(), SensorEventListener {
     private val seq = AtomicInteger(0)
     private var wakeLock: PowerManager.WakeLock? = null
     private var wifiLock: WifiManager.WifiLock? = null
+    private var sensorThread: HandlerThread? = null
 
     val running = AtomicBoolean(false)
 
@@ -67,7 +70,9 @@ class HeadTrackerService : Service(), SensorEventListener {
             socket = DatagramSocket()
             Thread(::pingLoop, "hotgirl-ping").start()
 
-            sensorManager.registerListener(this, sensor, 10_000)
+            sensorThread = HandlerThread("hotgirl-sensor").apply { start() }
+            val sensorHandler = Handler(sensorThread!!.looper)
+            sensorManager.registerListener(this, sensor, 10_000, sensorHandler)
         } catch (e: Exception) {
             Toast.makeText(this, "HoTGirl: ${e.javaClass.simpleName}: ${e.message}", Toast.LENGTH_LONG)
                 .show()
@@ -84,6 +89,8 @@ class HeadTrackerService : Service(), SensorEventListener {
     override fun onDestroy() {
         running.set(false)
         sensorManager.unregisterListener(this)
+        sensorThread?.quitSafely()
+        sensorThread = null
         wakeLock?.takeIf { it.isHeld }?.release()
         wifiLock?.takeIf { it.isHeld }?.release()
         socket?.close()
