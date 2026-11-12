@@ -5,6 +5,8 @@ import android.content.Context
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.widget.Button
 import android.widget.EditText
 import android.widget.TextView
@@ -16,6 +18,23 @@ import androidx.core.content.ContextCompat
 class MainActivity : AppCompatActivity() {
 
     private lateinit var prefs: SharedPreferences
+    private lateinit var status: TextView
+    private val handler = Handler(Looper.getMainLooper())
+
+    private val pollStatus = object : Runnable {
+        override fun run() {
+            if (HeadTrackerService.running.get()) {
+                val err = HeadTrackerService.lastError.get()
+                status.text = getString(
+                    R.string.status_diag,
+                    HeadTrackerService.samplesSent.get(),
+                    HeadTrackerService.sendErrors.get(),
+                    err ?: "—"
+                )
+            }
+            handler.postDelayed(this, 500)
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -24,7 +43,7 @@ class MainActivity : AppCompatActivity() {
         prefs = getSharedPreferences("hotgirl", Context.MODE_PRIVATE)
         val hostEdit = findViewById<EditText>(R.id.host)
         val portEdit = findViewById<EditText>(R.id.port)
-        val status = findViewById<TextView>(R.id.status)
+        status = findViewById(R.id.status)
         val start = findViewById<Button>(R.id.start)
         val stop = findViewById<Button>(R.id.stop)
 
@@ -59,6 +78,16 @@ class MainActivity : AppCompatActivity() {
             HeadTrackerService.stop(this)
             status.text = getString(R.string.status_stopped)
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        handler.post(pollStatus)
+    }
+
+    override fun onPause() {
+        super.onPause()
+        handler.removeCallbacks(pollStatus)
     }
 
     override fun onRequestPermissionsResult(

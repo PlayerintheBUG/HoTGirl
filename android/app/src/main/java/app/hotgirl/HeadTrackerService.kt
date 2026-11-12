@@ -6,6 +6,7 @@ import android.app.NotificationManager
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
@@ -14,10 +15,13 @@ import android.net.wifi.WifiManager
 import android.os.IBinder
 import android.os.PowerManager
 import android.os.SystemClock
+import android.widget.Toast
 import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetAddress
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 
 class HeadTrackerService : Service(), SensorEventListener {
@@ -29,6 +33,8 @@ class HeadTrackerService : Service(), SensorEventListener {
     private val seq = AtomicInteger(0)
     private var wakeLock: PowerManager.WakeLock? = null
     private var wifiLock: WifiManager.WifiLock? = null
+
+    val running = AtomicBoolean(false)
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -65,13 +71,18 @@ class HeadTrackerService : Service(), SensorEventListener {
         } catch (e: Exception) {
             Toast.makeText(this, "HoTGirl: ${e.javaClass.simpleName}: ${e.message}", Toast.LENGTH_LONG)
                 .show()
+            lastError.set("start: ${e.javaClass.simpleName}: ${e.message}")
             stopSelf()
             return START_NOT_STICKY
         }
+        running.set(true)
+        lastError.set(null)
+        Toast.makeText(this, "Invio a $host:$targetPort", Toast.LENGTH_SHORT).show()
         return START_STICKY
     }
 
     override fun onDestroy() {
+        running.set(false)
         sensorManager.unregisterListener(this)
         wakeLock?.takeIf { it.isHeld }?.release()
         wifiLock?.takeIf { it.isHeld }?.release()
@@ -95,7 +106,10 @@ class HeadTrackerService : Service(), SensorEventListener {
         val packet = DatagramPacket(buf, buf.size, addr, targetPort)
         try {
             sock.send(packet)
-        } catch (_: Exception) {
+            samplesSent.incrementAndGet()
+        } catch (e: Exception) {
+            sendErrors.incrementAndGet()
+            lastError.set("send: ${e.javaClass.simpleName}: ${e.message}")
         }
     }
 
@@ -135,7 +149,11 @@ class HeadTrackerService : Service(), SensorEventListener {
                 .setContentTitle(getString(R.string.notification_title))
                 .setSmallIcon(android.R.drawable.ic_menu_compass)
                 .build()
-        startForeground(NOTIFICATION_ID, notification)
+        startForeground(
+            NOTIFICATION_ID,
+            notification,
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+        )
     }
 
     companion object {
@@ -146,6 +164,10 @@ class HeadTrackerService : Service(), SensorEventListener {
 
         const val CHANNEL_ID = "hotgirl"
         const val NOTIFICATION_ID = 1
+
+        val samplesSent = AtomicLong(0)
+        val sendErrors = AtomicLong(0)
+        val lastError = AtomicReference<String?>(null)
 
         const val MAGIC = 0x48544752
         const val KIND_SAMPLE = 1
