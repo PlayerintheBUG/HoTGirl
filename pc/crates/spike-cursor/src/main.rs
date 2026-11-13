@@ -103,8 +103,9 @@ async fn main() {
                 let seq = sequence;
                 let serial = last_serial;
                 let sweep_regions = regions.clone();
+                let sweep_conn = connection.clone();
                 tokio::spawn(async move {
-                    corner_sweep(pointer, device, sweep_regions, seq, serial).await;
+                    corner_sweep(sweep_conn, pointer, device, sweep_regions, seq, serial).await;
                 });
             }
             EiEvent::Disconnected(disconnected) => {
@@ -117,6 +118,7 @@ async fn main() {
 }
 
 async fn corner_sweep(
+    connection: reis::event::Connection,
     pointer: PointerAbsolute,
     device: EiDevice,
     regions: Vec<(f32, f32, f32, f32)>,
@@ -136,10 +138,16 @@ async fn corner_sweep(
         .collect();
 
     device.start_emulating(serial, sequence);
+    if let Err(e) = connection.flush() {
+        eprintln!("flush after start_emulating failed: {e}");
+    }
     loop {
         for (x, y) in &corners {
             pointer.motion_absolute(*x, *y);
             device.frame(serial, 0);
+            if let Err(e) = connection.flush() {
+                eprintln!("flush failed: {e}");
+            }
             tokio::time::sleep(Duration::from_millis(1000)).await;
         }
     }

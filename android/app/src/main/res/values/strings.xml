@@ -10,5 +10,8 @@
     <string name="status_running">Tracking attivo</string>
     <string name="status_stopped">Tracking fermo</string>
     <string name="status_missing_host">Inserisci l\'indirizzo del PC</string>
+    <string name="status_error">Errore: %1$s</string>
+    <string name="status_diag">Servizio attivo — inviati: %1$d, errori: %2$d\nUltimo errore: %3$s</string>
+    <string name="permission_granted">Permesso notifiche concesso</string>
     <string name="notification_title">HoTGirl: head tracker attivo</string>
 </resources>

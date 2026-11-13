@@ -206,6 +206,7 @@ mod tests {
     fn sample_buffer_ordered_access() {
         let mut buf = SampleBuffer::new(8);
         let mk = |ts: i64| Sample {
+            seq: 0,
             event_ts_ns: ts,
             sent_ts_ns: ts,
             quat: [0.0, 0.0, 0.0, 1.0],

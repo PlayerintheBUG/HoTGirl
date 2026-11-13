@@ -3,6 +3,7 @@ name = "hotgirl-app"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+default-run = "hotgirl-app"
 
 [dependencies]
 hotgirl-protocol = { path = "../hotgirl-protocol" }

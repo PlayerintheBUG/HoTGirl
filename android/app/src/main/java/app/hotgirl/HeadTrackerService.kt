@@ -6,18 +6,24 @@ import android.app.NotificationManager
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.net.wifi.WifiManager
+import android.os.Handler
+import android.os.HandlerThread
 import android.os.IBinder
 import android.os.PowerManager
 import android.os.SystemClock
+import android.widget.Toast
 import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetAddress
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 
 class HeadTrackerService : Service(), SensorEventListener {
@@ -29,6 +35,11 @@ class HeadTrackerService : Service(), SensorEventListener {
     private val seq = AtomicInteger(0)
     private var wakeLock: PowerManager.WakeLock? = null
     private var wifiLock: WifiManager.WifiLock? = null
+    private var sensorThread: HandlerThread? = null
+    private var lastSensorTimestamp: Long = 0
+    private val initDeltas = ArrayList<Long>(64)
+    private val clockOffsetNs = AtomicLong(0)
+    private val clockOffsetReady = AtomicBoolean(false)
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -38,36 +49,50 @@ class HeadTrackerService : Service(), SensorEventListener {
             return START_NOT_STICKY
         }
         val host = intent?.getStringExtra(EXTRA_HOST) ?: return START_NOT_STICKY
-        targetPort = intent.getIntExtra(EXTRA_PORT, DEFAULT_PORT)
-        target.set(InetAddress.getByName(host))
+        startForegroundNotification()
+        try {
+            targetPort = intent.getIntExtra(EXTRA_PORT, DEFAULT_PORT)
+            target.set(InetAddress.getByName(host))
 
-        sensorManager = getSystemService(SENSOR_SERVICE) as SensorManager
-        val sensor = sensorManager.getDefaultSensor(Sensor.TYPE_GAME_ROTATION_VECTOR) ?: run {
+            sensorManager = getSystemService(SENSOR_SERVICE) as SensorManager
+            val sensor = sensorManager.getDefaultSensor(Sensor.TYPE_GAME_ROTATION_VECTOR)
+                ?: throw IllegalStateException("GAME_ROTATION_VECTOR non disponibile")
+
+            val pm = getSystemService(POWER_SERVICE) as PowerManager
+            wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "hotgirl:tracker").apply {
+                acquire()
+            }
+            val wm = applicationContext.getSystemService(WIFI_SERVICE) as WifiManager
+            wifiLock =
+                wm.createWifiLock(WifiManager.WIFI_MODE_FULL_LOW_LATENCY, "hotgirl:wifi").apply {
+                    acquire()
+                }
+
+            socket?.close()
+            socket = DatagramSocket()
+            Thread(::pingLoop, "hotgirl-ping").start()
+
+            sensorThread = HandlerThread("hotgirl-sensor").apply { start() }
+            val sensorHandler = Handler(sensorThread!!.looper)
+            sensorManager.registerListener(this, sensor, 10_000, sensorHandler)
+        } catch (e: Exception) {
+            Toast.makeText(this, "HoTGirl: ${e.javaClass.simpleName}: ${e.message}", Toast.LENGTH_LONG)
+                .show()
+            lastError.set("start: ${e.javaClass.simpleName}: ${e.message}")
             stopSelf()
             return START_NOT_STICKY
         }
-
-        startForegroundNotification()
-
-        val pm = getSystemService(POWER_SERVICE) as PowerManager
-        wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "hotgirl:tracker").apply {
-            acquire()
-        }
-        val wm = applicationContext.getSystemService(WIFI_SERVICE) as WifiManager
-        wifiLock = wm.createWifiLock(WifiManager.WIFI_MODE_FULL_LOW_LATENCY, "hotgirl:wifi").apply {
-            acquire()
-        }
-
-        socket?.close()
-        socket = DatagramSocket()
-        Thread(::pingLoop, "hotgirl-ping").start()
-
-        sensorManager.registerListener(this, sensor, 10_000)
+        running.set(true)
+        lastError.set(null)
+        Toast.makeText(this, "Invio a $host:$targetPort", Toast.LENGTH_SHORT).show()
         return START_STICKY
     }
 
     override fun onDestroy() {
+        running.set(false)
         sensorManager.unregisterListener(this)
+        sensorThread?.quitSafely()
+        sensorThread = null
         wakeLock?.takeIf { it.isHeld }?.release()
         wifiLock?.takeIf { it.isHeld }?.release()
         socket?.close()
@@ -81,7 +106,8 @@ class HeadTrackerService : Service(), SensorEventListener {
         val quaternion = event.values
         val buf = ByteArray(SAMPLE_PACKET_LEN)
         writeHeader(buf, KIND_SAMPLE, seq.getAndIncrement() and 0xFFFF)
-        writeI64(buf, 16, event.timestamp)
+        lastSensorTimestamp = event.timestamp
+        writeI64(buf, 16, event.timestamp + sensorClockOffset())
         writeF32(buf, 24, quaternion[0])
         writeF32(buf, 28, quaternion[1])
         writeF32(buf, 32, quaternion[2])
@@ -90,11 +116,35 @@ class HeadTrackerService : Service(), SensorEventListener {
         val packet = DatagramPacket(buf, buf.size, addr, targetPort)
         try {
             sock.send(packet)
-        } catch (_: Exception) {
+            samplesSent.incrementAndGet()
+        } catch (e: Exception) {
+            sendErrors.incrementAndGet()
+            lastError.set("send: ${e.javaClass.simpleName}: ${e.message}")
         }
     }
 
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
+
+    /**
+     * Sensor event timestamps may use a different clock base than
+     * elapsedRealtimeNanos (e.g. monotonic without suspend time). Estimate
+     * the constant difference as the median of the first 64 delivery deltas,
+     * then reuse it for every event.
+     */
+    private fun sensorClockOffset(): Long {
+        if (clockOffsetReady.get()) return clockOffsetNs.get()
+        val now = SystemClock.elapsedRealtimeNanos()
+        synchronized(initDeltas) {
+            if (clockOffsetReady.get()) return clockOffsetNs.get()
+            initDeltas.add(now - lastSensorTimestamp)
+            if (initDeltas.size >= 64) {
+                val sorted = initDeltas.toLongArray().also { it.sort() }
+                clockOffsetNs.set(sorted[sorted.size / 2])
+                clockOffsetReady.set(true)
+            }
+        }
+        return clockOffsetNs.get()
+    }
 
     private fun pingLoop() {
         val sock = socket ?: return
@@ -130,7 +180,11 @@ class HeadTrackerService : Service(), SensorEventListener {
                 .setContentTitle(getString(R.string.notification_title))
                 .setSmallIcon(android.R.drawable.ic_menu_compass)
                 .build()
-        startForeground(NOTIFICATION_ID, notification)
+        startForeground(
+            NOTIFICATION_ID,
+            notification,
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+        )
     }
 
     companion object {
@@ -141,6 +195,10 @@ class HeadTrackerService : Service(), SensorEventListener {
 
         const val CHANNEL_ID = "hotgirl"
         const val NOTIFICATION_ID = 1
+
+        val samplesSent = AtomicLong(0)
+        val sendErrors = AtomicLong(0)
+        val lastError = AtomicReference<String?>(null)
 
         const val MAGIC = 0x48544752
         const val KIND_SAMPLE = 1
