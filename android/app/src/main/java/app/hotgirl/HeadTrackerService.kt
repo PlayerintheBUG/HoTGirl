@@ -196,6 +196,7 @@ class HeadTrackerService : Service(), SensorEventListener {
         const val CHANNEL_ID = "hotgirl"
         const val NOTIFICATION_ID = 1
 
+        val running = AtomicBoolean(false)
         val samplesSent = AtomicLong(0)
         val sendErrors = AtomicLong(0)
         val lastError = AtomicReference<String?>(null)
